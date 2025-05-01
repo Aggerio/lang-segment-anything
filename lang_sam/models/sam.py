@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import os
 from hydra import compose
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
@@ -43,16 +44,35 @@ class SAM:
 
     def _load_checkpoint(self, model: torch.nn.Module):
         if self.ckpt_path is None:
-            checkpoint_url = SAM_MODELS[self.sam_type]["url"]
-            state_dict = torch.hub.load_state_dict_from_url(checkpoint_url, map_location="cpu")["model"]
+            # Check if weights exist in local weights directory
+            weights_dir = os.path.abspath("weights")
+            model_filename = f"{self.sam_type}.pt"
+            local_weights_path = os.path.join(weights_dir, model_filename)
+            
+            if os.path.exists(local_weights_path):
+                print(f"Loading weights from local path: {local_weights_path}")
+                state_dict = torch.load(local_weights_path, map_location="cpu")["model"]
+            else:
+                print(f"Downloading weights for {self.sam_type}")
+                # Set torch hub cache directory to our weights directory
+                torch.hub.set_dir(weights_dir)
+                
+                checkpoint_url = SAM_MODELS[self.sam_type]["url"]
+                state_dict = torch.hub.load_state_dict_from_url(checkpoint_url, map_location="cpu")["model"]
+                
+                # Save the downloaded weights with our own naming
+                os.makedirs(weights_dir, exist_ok=True)
+                torch.save({"model": state_dict}, local_weights_path)
+                print(f"Saved weights to: {local_weights_path}")
         else:
-            checkpoint_url = self.ckpt_path  # Ensure checkpoint_url is defined
+            print(f"Loading weights from custom path: {self.ckpt_path}")
             state_dict = torch.load(self.ckpt_path, map_location="cpu", weights_only=True)["model"]
+        
         try:
             model.load_state_dict(state_dict, strict=True)
         except Exception as e:
             raise ValueError(f"Problem loading SAM please make sure you have the right model type: {self.sam_type} \
-                and a working checkpoint: {checkpoint_url}. Recommend deleting the checkpoint and \
+                and a working checkpoint: {checkpoint_url if self.ckpt_path is None else self.ckpt_path}. Recommend deleting the checkpoint and \
                 re-downloading it. Error: {e}")
 
     def generate(self, image_rgb: np.ndarray) -> list[dict]:
@@ -92,4 +112,10 @@ class SAM:
         masks = [np.squeeze(mask, axis=1) if len(mask.shape) > 3 else mask for mask in masks]
         scores = [np.squeeze(score) for score in scores]
         logits = [np.squeeze(logit, axis=1) if len(logit.shape) > 3 else logit for logit in logits]
+
+        # Clear GPU memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
         return masks, scores, logits

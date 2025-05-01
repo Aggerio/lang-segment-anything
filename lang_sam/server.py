@@ -4,6 +4,7 @@ import litserve as ls
 import numpy as np
 from fastapi import Response, UploadFile
 from PIL import Image
+import torch
 
 from lang_sam import LangSAM
 from lang_sam.utils import draw_image
@@ -93,6 +94,11 @@ class LangSAMAPI(ls.LitAPI):
             results["labels"],
         )
         output_image = Image.fromarray(np.uint8(output_image)).convert("RGB")
+
+        # Clear GPU memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 
         return {"output_image": output_image}
 
